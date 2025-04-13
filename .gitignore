@@ -1,1 +1,9 @@
 result
+result-*
+
+# Unencrypted secrets
+secrets.yaml.dec
+.decrypted~*
+
+# Do NOT ignore the encrypted secrets.yaml - it's safe to commit
+# Do NOT ignore .sops.yaml - it contains no sensitive information

@@ -1,0 +1,11 @@
+---
+# This defines which keys can decrypt which files
+# Replace AGE_PUBLIC_KEY with your actual public key from the previous step
+
+creation_rules:
+  # All YAML files in this directory are encrypted with this key
+  - path_regex: secrets\.yaml$
+    key_groups:
+    - age:
+      # Replace with your actual public key!
+      - age1cvu44alxzkqsat75037wwsxyepqh9xjl3t0x82gjyx8k47hqepwqem7lzz
