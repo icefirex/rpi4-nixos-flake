@@ -1,15 +1,27 @@
 # NixOS for Raspberry Pi 4
 
-This repository contains a flake-based NixOS configuration for Raspberry Pi 4. It creates a bootable SD card image with SSH and WiFi pre-configured for headless operation.
+This repository contains a flake-based NixOS configuration for Raspberry Pi 4. It creates a bootable SD card image with SSH and WiFi pre-configured for headless operation, and supports secure deployment with encrypted secrets.
 
 ## Features
 
-- Flake-based configuration
+- Flake-based configuration with modular design
 - Headless setup with SSH pre-configured
 - WiFi configuration included in the image
 - Cross-compilation support for building on x86_64 systems
 - Configuration files preserved in the image for immediate `nixos-rebuild` use
+- Encrypted secrets management using sops-nix
 - Optimized for Raspberry Pi 4
+
+## Architecture
+
+The configuration is split into multiple files for better modularity:
+
+- `base-configuration.nix`: Common settings for both SD image and deployed system
+- `sd-image-configuration.nix`: Settings specific to the SD image (temporary WiFi password, SSH keys)
+- `sops-configuration.nix`: Settings that use sops-nix for securely managing secrets
+- `flake.nix`: Main entry point defining system configurations and build outputs
+- `sd-image.nix`: SD card image-specific settings
+- `secrets.yaml`: Encrypted secrets for WiFi passwords and SSH keys (encrypted with sops)
 
 ## Prerequisites
 
@@ -48,36 +60,73 @@ This installer automatically enables flakes and other useful features.
 
 ```bash
 git clone https://github.com/icefirex/rpi4-nixos-flake.git
-cd nixos-rpi4
+cd rpi4-nixos-flake
 ```
 
 2. Customize the configuration for your needs:
 
-   - Edit `configuration.nix` to configure your system
-   - Update the WiFi settings in `configuration.nix`:
+   - Edit `base-configuration.nix` for common system settings
+   - Update the WiFi settings and SSH key in `sd-image-configuration.nix` for the initial boot:
    
      ```nix
+     # In sd-image-configuration.nix
      networking.wireless = {
        enable = true;
        networks = {
          "YourWiFiSSID" = {
-           psk = "YourWiFiPassword";
+           psk = "YourTemporaryWiFiPassword";
          };
        };
      };
-     ```
-   
-   - Update the SSH key in `configuration.nix`:
-   
-     ```nix
+     
      users.users.nixos = {
-       isNormalUser = true;
-       extraGroups = [ "wheel" ];
+       # ...
        openssh.authorizedKeys.keys = [
          "ssh-ed25519 YOUR_SSH_PUBLIC_KEY_HERE"
        ];
      };
      ```
+
+3. Set up sops-nix for encrypted secrets:
+
+   a. Generate an age key pair if you don't have one:
+   
+   ```bash
+   mkdir -p ~/.config/sops/age
+   nix-shell -p age --run "age-keygen -o ~/.config/sops/age/keys.txt"
+   ```
+
+   b. Get your public key:
+   
+   ```bash
+   nix-shell -p age --run "age-keygen -y ~/.config/sops/age/keys.txt"
+   # Output will look like: age1cvu44alxzkqsat75037wwsxyepqh9xjl3t0x82gjyx8k47hqepwqem7lzz
+   ```
+
+   c. Update `.sops.yaml` with your public key:
+   
+   ```yaml
+   creation_rules:
+     - path_regex: secrets\.yaml$
+       key_groups:
+       - age:
+         - age1cvu44alxzkqsat75037wwsxyepqh9xjl3t0x82gjyx8k47hqepwqem7lzz
+   ```
+
+   d. Create or update your encrypted secrets:
+   
+   ```bash
+   nix-shell -p sops --run "sops secrets.yaml"
+   ```
+
+   Add your WiFi password and SSH key:
+   
+   ```yaml
+   wifi_TP-Link_E4FC_5G: your-actual-wifi-password
+   ssh_authorized_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMP5...
+   ```
+
+   Save and close the file. The content will be automatically encrypted.
 
 ## Building the SD Card Image
 
@@ -98,7 +147,7 @@ sudo nixos-rebuild switch
 Then build the image:
 
 ```bash
-nix build .#default
+nix build .#sdImage
 ```
 
 ### On other systems with Nix
@@ -150,7 +199,7 @@ sudo dd if=nixos-rpi4.img of=/dev/sdX bs=4M status=progress conv=fsync
 
 1. Insert the SD card into your Raspberry Pi 4
 2. Connect power to the Raspberry Pi
-3. Wait for it to boot and connect to your WiFi network
+3. Wait for it to boot and connect to your WiFi network using the temporary password set in `sd-image-configuration.nix`
 4. Connect via SSH:
 
 ```bash
@@ -159,15 +208,14 @@ ssh nixos@rpi4-nixos-ice.local
 ssh nixos@<IP_ADDRESS>
 ```
 
-Since we configured the system with passwordless sudo for the nixos user (through SSH key authentication), you can immediately run:
+5. Deploy your full configuration with SOPS-encrypted secrets:
 
 ```bash
-# Check your configuration if it exists
-ls -la /etc/nixos/
-
-# If the config files are present, you can update your system with:
-sudo nixos-rebuild switch --flake /etc/nixos#rpi4
+# On your development machine
+nix run .#deploy nixos@rpi4-nixos-ice
 ```
+
+This will deploy the full configuration with your encrypted secrets properly set up.
 
 ## Customizing After Deployment
 
@@ -176,7 +224,8 @@ Since the configuration files are set up in `/etc/nixos/` on the Raspberry Pi, y
 1. Edit the configuration directly on the Pi:
 
 ```bash
-sudo nano /etc/nixos/configuration.nix
+sudo nano /etc/nixos/base-configuration.nix
+sudo nano /etc/nixos/sops-configuration.nix
 ```
 
 2. Apply changes:
@@ -196,6 +245,24 @@ sudo git config --global user.name "Your Name"
 sudo git commit -m "Initial configuration"
 ```
 
+## Updating Secrets
+
+To update your secrets after deployment:
+
+1. Edit the secrets file locally:
+
+```bash
+nix-shell -p sops --run "sops secrets.yaml"
+```
+
+2. Update your secrets (WiFi passwords, SSH keys, etc.)
+
+3. Redeploy:
+
+```bash
+nix run .#deploy nixos@rpi4-nixos-ice
+```
+
 ## Troubleshooting
 
 ### Cross-Compilation Issues
@@ -209,6 +276,29 @@ sudo nixos-rebuild switch
 
 # Then try building again
 nix build .#default
+```
+
+### SOPS-Related Issues
+
+If you encounter issues with SOPS:
+
+1. Make sure your age key is properly set up:
+
+```bash
+ls -la ~/.config/sops/age/keys.txt
+```
+
+2. Check that your public key in `.sops.yaml` matches your local key:
+
+```bash
+nix-shell -p age --run "age-keygen -y ~/.config/sops/age/keys.txt"
+```
+
+3. Verify the secrets file is properly encrypted:
+
+```bash
+cat secrets.yaml
+# Should show encrypted content, not plaintext
 ```
 
 ### SSH Connection Issues
@@ -236,4 +326,5 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 - [NixOS](https://nixos.org/) for the operating system
 - [NixOS Hardware](https://github.com/NixOS/nixos-hardware) for Raspberry Pi support
+- [SOPS-Nix](https://github.com/Mic92/sops-nix) for encrypted secrets management
 - [The Nix community](https://discourse.nixos.org/) for their documentation and support

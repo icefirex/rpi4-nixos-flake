@@ -7,3 +7,5 @@ secrets.yaml.dec
 
 # Do NOT ignore the encrypted secrets.yaml - it's safe to commit
 # Do NOT ignore .sops.yaml - it contains no sensitive information
+
+*.img

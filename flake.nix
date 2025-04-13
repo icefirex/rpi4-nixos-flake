@@ -23,11 +23,11 @@
         modules = modules;
       };
 
-    # Common modules for both SD image and deployment
-    commonModules = [
+    # Base modules for both configurations
+    baseModules = [
       nixos-hardware.nixosModules.raspberry-pi-4
-      ./configuration.nix
-      sops-nix.nixosModules.sops
+      ./base-configuration.nix
+      ./base-cleanup.nix
     ];
       
     # Module to embed configuration files into /etc/nixos
@@ -45,8 +45,20 @@
           source = ./flake.lock;
           mode = "0644";
         };
-        "nixos/configuration.nix" = {
-          source = ./configuration.nix;
+        "nixos/base-configuration.nix" = {
+          source = ./base-configuration.nix;
+          mode = "0644";
+        };
+        "nixos/sd-image-configuration.nix" = {
+          source = ./sd-image-configuration.nix;
+          mode = "0644";
+        };
+        "nixos/sops-configuration.nix" = {
+          source = ./sops-configuration.nix;
+          mode = "0644";
+        };
+        "nixos/base-cleanup.nix" = {
+          source = ./base-cleanup.nix;
           mode = "0644";
         };
         # Include sops configuration files
@@ -85,19 +97,26 @@
     nixosConfigurations = {
       # Configuration for creating SD image
       rpi4-sdimage = nixosSystem "aarch64-linux" (
-        commonModules ++ [
+        baseModules ++ [
           # SD image module
           "${nixpkgs}/nixos/modules/installer/sd-card/sd-image-aarch64.nix"
           # SD image specific settings
           ./sd-image.nix
+          # SD image specific configuration
+          ./sd-image-configuration.nix
           # Add the embed config module
           embedConfigModule
+          # DO NOT include sops-nix for SD image
         ]
       );
       
       # Configuration for deploying to a running system
       rpi4 = nixosSystem "aarch64-linux" (
-        commonModules ++ [
+        baseModules ++ [
+          # Include sops-nix
+          sops-nix.nixosModules.sops
+          # Include sops configuration
+          ./sops-configuration.nix
           # Add the embed config module
           embedConfigModule
         ]
@@ -121,10 +140,12 @@
             };
             crossConfig = nixpkgs.lib.nixosSystem {
               system = "aarch64-linux";
-              modules = commonModules ++ [
+              modules = baseModules ++ [
                 "${nixpkgs}/nixos/modules/installer/sd-card/sd-image-aarch64.nix"
                 ./sd-image.nix
+                ./sd-image-configuration.nix
                 embedConfigModule
+                # DO NOT include sops-nix for SD image
               ];
               pkgs = crossPkgs;
             };
@@ -147,9 +168,47 @@
                 system = "aarch64-linux";
               };
             };
+            # For cross-compiling, use a simpler configuration without sops
             crossConfig = nixpkgs.lib.nixosSystem {
               system = "aarch64-linux";
-              modules = commonModules ++ [
+              modules = baseModules ++ [
+                # Add a simplified version of the wireless config for building only
+                ({ lib, ... }: {
+                  networking.wireless = {
+                    enable = true;
+                    networks."TP-Link_E4FC_5G" = {
+                      # Use a dummy password for build only
+                      psk = "12345678";
+                    };
+                    userControlled.enable = true;
+                  };
+                  
+                  # Create a regular user with a placeholder SSH key
+                  users.users.nixos = {
+                    isNormalUser = true;
+                    extraGroups = [ "wheel" "networkmanager" ];
+                    openssh.authorizedKeys.keys = [
+                      "ssh-ed25519 -your-ssh-key-here-"
+                    ];
+                  };
+                  
+                  # Still embed sops files in the result
+                  environment.etc = {
+                    "nixos/sops-configuration.nix" = {
+                      source = ./sops-configuration.nix;
+                      mode = "0644";
+                    };
+                    # Include sops configuration files
+                    "nixos/.sops.yaml" = lib.mkIf (builtins.pathExists ./.sops.yaml) {
+                      source = ./.sops.yaml;
+                      mode = "0644";
+                    };
+                    "nixos/secrets.yaml" = lib.mkIf (builtins.pathExists ./secrets.yaml) {
+                      source = ./secrets.yaml;
+                      mode = "0600";
+                    };
+                  };
+                })
                 embedConfigModule
               ];
               pkgs = crossPkgs;
@@ -157,7 +216,7 @@
           in
             crossConfig.config.system.build.toplevel;
 
-      # Convenience script for deploying
+      # Deploy script remains the same
       deploy = 
         if system == "x86_64-linux" then
           let
